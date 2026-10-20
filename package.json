@@ -1,0 +1,32 @@
+{
+  "name": "digital-data-uploader",
+  "version": "0.1.0",
+  "description": "Cloudflare Worker for private Apple Health workout uploads",
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "node --test tests/*.test.ts",
+    "build": "node scripts/wrangler.mjs deploy --dry-run --outdir .wrangler/build",
+    "dev": "node scripts/wrangler.mjs dev",
+    "db:local": "node scripts/wrangler.mjs d1 migrations apply digital-data-uploader --local",
+    "db:remote": "node scripts/wrangler.mjs d1 migrations apply digital-data-uploader --remote",
+    "cf": "node scripts/wrangler.mjs",
+    "test:integration": "npm run build && node tests/runtime.integration.ts",
+    "validate-file": "node scripts/validate-file.ts",
+    "benchmark": "node scripts/benchmark.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "UNLICENSED",
+  "type": "module",
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261016.1",
+    "@types/node": "26.6.5",
+    "miniflare": "5.20261012.1-beta",
+    "typescript": "5.9.3",
+    "wrangler": "4.151.1"
+  },
+  "private": true,
+  "engines": {
+    "node": ">=22.18.0"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "workouts": [
+    {
+      "identifier": "00000000-0000-0000-0000-000000000001",
+      "type": "Climbing",
+      "start_date": "Oct 15, 2026 at 08:31",
+      "end_date": "Oct 15, 2026 at 09:30",
+      "duration": "3,488.907 sec",
+      "elapsed_time": "3,408.581 sec",
+      "energy_burned": "407.883 kcal",
+      "active_calories": "327.899632035718",
+      "average_heart_rate": "125.297759258286",
+      "average_speed": "",
+      "total_distance": "",
+      "flights_climbed": "",
+      "source_name": "Synthetic Watch",
+      "device_name": "Apple Watch",
+      "device_model": "Watch",
+      "recording_method": "Watch",
+      "is_from_watch": "Yes",
+      "is_from_third_party": "No"
+    }
+  ]
+}

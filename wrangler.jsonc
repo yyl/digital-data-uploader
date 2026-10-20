@@ -1,0 +1,24 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "digital-data-uploader",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-16",
+  "workers_dev": true,
+  "observability": {
+    "enabled": true,
+    "logs": { "enabled": true, "invocation_logs": false }
+  },
+  "triggers": { "crons": ["*/5 * * * *"] },
+  "vars": {
+    "ASSUMED_TIMEZONE": "America/Los_Angeles",
+    "GITHUB_OWNER": "yyl",
+    "GITHUB_REPO": "digital-data-vault",
+    "GITHUB_BRANCH": "main"
+  },
+  "d1_databases": [{
+    "binding": "DB",
+    "database_name": "digital-data-uploader",
+    "database_id": "00000000-0000-0000-0000-000000000000",
+    "migrations_dir": "migrations"
+  }]
+}
