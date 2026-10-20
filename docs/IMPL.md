@@ -337,7 +337,7 @@ curl --fail-with-body -sS "$UPLOADER_URL/v1/workout-batches" \
 This sample creates a real queued synthetic batch in your local inbox. A later
 admin retry can commit it to the configured vault along with phone uploads; use
 the mocked integration test for disposable end-to-end fixtures. Local cron is not
-an automatic five-minute timer; use admin retry to drive delivery in this workflow.
+an automatic hourly timer; use admin retry to drive delivery in this workflow.
 
 Use the returned batch ID to check its receipt:
 
@@ -387,7 +387,7 @@ scheduled locked/unlocked phone execution remain to be tested.
    deployed upload token. Send an upload, verify automatic archival, inspect the
    private file/receipt, and measure staging CPU before enabling the phone schedule.
 
-The configured cron is `*/5 * * * *` (UTC). Invocation logs are disabled;
+The configured cron is `0 * * * *` (at minute zero of every hour, UTC). Invocation logs are disabled;
 application logs contain fixed codes such as `request_failed`, `delivery_failed`,
 `delivery_attention_required`, and `upload_stale`. An unexpected scheduled error
 is sanitized as `scheduled_delivery_failed`. Do not enable body/header tracing

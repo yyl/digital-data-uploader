@@ -8,7 +8,7 @@
     "enabled": true,
     "logs": { "enabled": true, "invocation_logs": false }
   },
-  "triggers": { "crons": ["*/5 * * * *"] },
+  "triggers": { "crons": ["0 * * * *"] },
   "vars": {
     "ASSUMED_TIMEZONE": "America/Los_Angeles",
     "GITHUB_OWNER": "yyl",

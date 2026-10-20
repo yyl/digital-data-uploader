@@ -66,7 +66,7 @@ another object.
 | `empty` | Successful request with no workouts to save. |
 | `failed` or an HTTP error | Inspect the error and fix the cause; see [troubleshooting](docs/IMPL.md#troubleshooting). |
 
-On Cloudflare, delivery runs every five minutes. Locally, use the
+On Cloudflare, delivery runs hourly. Locally, use the
 [admin retry command](docs/IMPL.md#exercise-the-handler-from-the-mac) after uploading.
 One retry can deliver up to three pending batches, with one commit per newly
 archived batch—including uploads left from earlier tests.
