@@ -1,24 +1,25 @@
-import type { Batch, Env } from './types.ts';
+import type { Batch, Env, NewBatch } from './types.ts';
 import { HttpError, MAX_PENDING_BYTES, MAX_RECEIPTS } from './types.ts';
 
 export async function getBatch(env: Env, id: string): Promise<Batch | null> {
   return env.DB.prepare('SELECT * FROM batches WHERE id = ?').bind(id).first<Batch>();
 }
 export function receipt(b: Batch) {
-  return { batch_id: b.id, status: b.state, workout_count: b.workout_count,
+  return { batch_id: b.id, status: b.state, source: b.source, record_count: b.record_count,
     received_at: b.received_at, archived_at: b.archived_at,
     commit_sha: b.commit_sha, error: b.last_error };
 }
-export async function accept(env: Env, id: string, envelope: string, hash: string, count: number, now: string) {
+export async function accept(env: Env, batch: NewBatch) {
+  const { id, envelope, archive_hash, source, record_count, archive_path, received_at } = batch;
   const bytes = new TextEncoder().encode(envelope).byteLength;
   // Capacity check and insertion share a single serialized SQL statement. Competing
   // uploads cannot both reserve the last space using an earlier count.
   await env.DB.prepare(`INSERT INTO batches
-    (id, archive_hash, envelope, payload_bytes, workout_count, received_at, state)
-    SELECT ?, ?, ?, ?, ?, ?, 'queued'
+    (id, archive_hash, envelope, payload_bytes, source, record_count, archive_path, received_at, state)
+    SELECT ?, ?, ?, ?, ?, ?, ?, ?, 'queued'
     WHERE (SELECT COUNT(*) FROM batches) < ?
       AND COALESCE((SELECT SUM(payload_bytes) FROM batches WHERE envelope IS NOT NULL), 0) + ? <= ?
-    ON CONFLICT(id) DO NOTHING`).bind(id, hash, envelope, bytes, count, now,
+    ON CONFLICT(id) DO NOTHING`).bind(id, archive_hash, envelope, bytes, source, record_count, archive_path, received_at,
       MAX_RECEIPTS, bytes, MAX_PENDING_BYTES).run();
   const b = await getBatch(env, id);
   if (!b) throw new HttpError(503, 'inbox_capacity_reached');

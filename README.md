@@ -1,8 +1,9 @@
 # digital-data-uploader
 
-Upload Apple Health workout summaries from an iPhone Shortcut and save them in
-your private `digital-data-vault` GitHub repository. The server processes the
-Shortcut's existing JSON; the phone only finds workouts, builds JSON, and sends it.
+Upload JSON from supported sources and save it in your private `digital-data-vault`
+GitHub repository. Apple Health workout summaries from an iPhone Shortcut are the
+first supported source. The server processes the Shortcut's existing JSON; the
+phone only finds workouts, builds JSON, and sends it.
 
 Phone uploads and manual delivery to the vault have been tested locally. Cloud
 deployment and scheduled phone runs still need verification. Importing these
@@ -82,6 +83,12 @@ interpretation warnings. Repeating an identical upload reuses its receipt. These
 archives do not yet update the analysis database or reports in `digital-data-dump`.
 Keep the existing XML export workflow for richer Health data.
 
+Receipts identify the `source` (currently `apple_health`) and `record_count`.
+The count field replaces `workout_count`, including in an `empty` response. The
+phone's upload URL and `{"workouts":[...]}` request body stay the same. Admins can
+read any receipt at `GET /v1/batches/<batch-id>`; the existing workout receipt URL
+also continues to work for Apple Health.
+
 ## Schedule uploads
 
 After a manual upload and vault check succeed, create a Shortcuts personal
@@ -98,3 +105,4 @@ that threshold taken into account.
 - [Design](docs/DESIGN.md): components, ownership, end-to-end flow, and future importer.
 - [Implementation](docs/IMPL.md): credentials, API, source map, delivery internals, and testing.
 - [Review](docs/REVIEW.md): implementation review findings and verification history.
+- [Journal](docs/JOUNRAL.md): dated implementation changes, decisions, and remaining work.

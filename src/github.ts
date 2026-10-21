@@ -1,6 +1,5 @@
 import type { Batch, Env } from './types.ts';
-import { ARCHIVE_PREFIX } from './types.ts';
-import { sha256 } from './normalize.ts';
+import { sha256 } from './json.ts';
 
 export class DeliveryError extends Error {
   code: string;
@@ -67,7 +66,7 @@ export async function archive(env: Env, b: Batch, request: Fetch = fetch): Promi
   const repository = await api(env, '', {}, request);
   if (!repository.ok) failure(repository);
   if ((await data(repository)).private !== true) throw new DeliveryError('destination_not_private', true);
-  const path = `${ARCHIVE_PREFIX}${b.id}.json`;
+  const path = b.archive_path;
   const contentPath = `contents/${path}`;
   const existing = await api(env, `${contentPath}?ref=${encodeURIComponent(env.GITHUB_BRANCH)}`, {}, request);
   if (existing.ok) {
@@ -92,7 +91,7 @@ export async function archive(env: Env, b: Batch, request: Fetch = fetch): Promi
   // 404 can mean a missing file OR a private-repo permission problem. The create
   // request disambiguates; a denied create becomes a visible permanent failure.
   const created = await api(env, contentPath, {
-    method: 'PUT', body: JSON.stringify({ message: 'Archive Apple Health workout batch',
+    method: 'PUT', body: JSON.stringify({ message: `Archive ${b.source} batch`,
       branch: env.GITHUB_BRANCH, content: toBase64(b.envelope) }),
   }, request);
   if (!created.ok) failure(created);

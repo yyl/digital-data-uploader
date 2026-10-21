@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { normalize } from '../src/normalize.ts';
+import { normalize } from '../src/sources/apple-health.ts';
 const path = process.argv[2];
 if (!path) { console.error('Usage: npm run validate-file -- /path/to/workouts.json'); process.exit(1); }
 try {

@@ -10,14 +10,21 @@ test('accepts durably, deduplicates retries and exposes metadata only to admin',
   assert.equal(r.status, 202); assert.equal(r.headers.get('cache-control'), 'no-store');
   const receipt = await r.json();
   assert.equal(receipt.status, 'queued');
+  assert.equal(receipt.source, 'apple_health');
+  assert.equal(receipt.record_count, 1);
+  assert.equal('workout_count' in receipt, false);
   const saved = sql.prepare('SELECT * FROM batches').get()!;
   assert.equal(saved.id, receipt.batch_id); assert.ok(saved.envelope);
+  assert.equal(saved.source, 'apple_health'); assert.equal(saved.record_count, 1);
   assert.equal((await (await handle(upload(env), env)).json()).received_at, receipt.received_at);
   assert.equal(sql.prepare('SELECT COUNT(*) n FROM batches').get()!.n, 1);
   const url = `https://uploader.example/v1/workout-batches/${receipt.batch_id}`;
   assert.equal((await handle(new Request(url, { headers: { Authorization: `Bearer ${env.UPLOAD_TOKEN}` } }), env)).status, 401);
   const admin = await handle(new Request(url, { headers: { Authorization: `Bearer ${env.ADMIN_TOKEN}` } }), env);
   assert.equal(admin.status, 200); assert.equal((await admin.text()).includes('Climbing'), false);
+  const genericUrl = `https://uploader.example/v1/batches/${receipt.batch_id}`;
+  assert.equal((await handle(new Request(genericUrl, { headers: { Authorization: `Bearer ${env.UPLOAD_TOKEN}` } }), env)).status, 401);
+  assert.deepEqual(await (await handle(new Request(genericUrl, { headers: { Authorization: `Bearer ${env.ADMIN_TOKEN}` } }), env)).json(), receipt);
   sql.close();
 });
 test('unauthorized, unconfigured and invalid input never enters inbox', async () => {
@@ -33,7 +40,9 @@ test('unauthorized, unconfigured and invalid input never enters inbox', async ()
 test('body limit applies to actual bytes without Content-Length, empty list is no-op', async () => {
   const { env, sql } = environment();
   assert.equal((await handle(upload(env, [], { body: ' '.repeat(MAX_BYTES + 1) }), env)).status, 413);
-  assert.equal((await handle(upload(env, []), env)).status, 200);
+  const empty = await handle(upload(env, []), env);
+  assert.equal(empty.status, 200);
+  assert.deepEqual(await empty.json(), { status: 'empty', source: 'apple_health', record_count: 0 });
   assert.equal(sql.prepare('SELECT COUNT(*) n FROM batches').get()!.n, 0);
   sql.close();
 });

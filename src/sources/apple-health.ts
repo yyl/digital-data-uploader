@@ -1,4 +1,8 @@
-import { HttpError, MAX_WORKOUTS, NORMALIZATION_VERSION } from './types.ts';
+import { HttpError } from '../types.ts';
+import type { SourceAdapter } from '../types.ts';
+
+const MAX_WORKOUTS = 100;
+const NORMALIZATION_VERSION = 1;
 
 const FIELDS = new Set([
   'average_speed', 'total_distance', 'start_date', 'is_from_third_party',
@@ -17,18 +21,6 @@ function invalid(field: string): never { throw new HttpError(422, 'invalid_field
 function object(value: unknown, field: string): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) invalid(field);
   return value as Record<string, unknown>;
-}
-export function canonical(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
-  if (value !== null && typeof value === 'object') {
-    const o = value as Record<string, unknown>;
-    return `{${Object.keys(o).sort().map(k => `${JSON.stringify(k)}:${canonical(o[k])}`).join(',')}}`;
-  }
-  return JSON.stringify(value);
-}
-export async function sha256(value: string): Promise<string> {
-  return [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))]
-    .map(b => b.toString(16).padStart(2, '0')).join('');
 }
 function formatter(zone: string): Intl.DateTimeFormat {
   let f = formatters.get(zone);
@@ -144,3 +136,24 @@ export function normalize(input: unknown, zone: string) {
       'duration_and_elapsed_meanings_unverified', 'energy_semantics_and_unitless_measurement_units_unverified'],
   };
 }
+
+// Keep the established Apple Health identity and archive bytes compatible with
+// existing local uploads and the vault importer.
+export const appleHealth: SourceAdapter = {
+  id: 'apple_health',
+  uploadPath: '/v1/workout-batches',
+  archivePrefix: 'files/apple_health/actions/batches/',
+  legacyBatchIdentity: true,
+  normalize(input, zone) {
+    const result = normalize(input, zone);
+    return {
+      recordCount: result.workouts.length,
+      identity: { schema_version: result.schema_version,
+        normalization_version: result.normalization_version,
+        timezone_assumed: zone, ...result.input },
+      payload: { schema_version: result.schema_version,
+        normalization_version: result.normalization_version,
+        timezone_assumed: zone, warnings: result.warnings, workouts: result.workouts },
+    };
+  },
+};

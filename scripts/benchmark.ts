@@ -1,4 +1,5 @@
-import { normalize, canonical, sha256 } from '../src/normalize.ts';
+import { normalize } from '../src/sources/apple-health.ts';
+import { canonical, sha256 } from '../src/json.ts';
 import { workout } from '../tests/helpers.ts';
 const input = {workouts:Array.from({length:100},(_,i)=>workout({
   identifier:`00000000-0000-0000-0000-${String(i+1).padStart(12,'0')}`,

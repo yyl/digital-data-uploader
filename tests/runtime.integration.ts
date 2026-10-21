@@ -36,7 +36,11 @@ try {
     method:'POST',headers,body:JSON.stringify({workouts:items}),
   });
   const first = await send(); assert.equal(first.status,202);
-  const receipt = await first.json() as {batch_id:string};
+  const receipt = await first.json() as {batch_id:string,source:string,record_count:number};
+  assert.equal(receipt.source,'apple_health'); assert.equal(receipt.record_count,1);
+  const stored = (await db.prepare('SELECT source,record_count,archive_path FROM batches').first())!;
+  assert.equal(stored.source,'apple_health'); assert.equal(stored.record_count,1);
+  assert.equal(stored.archive_path,`files/apple_health/actions/batches/${receipt.batch_id}.json`);
   assert.equal((await send()).status,202);
   const retry = () => mf.dispatchFetch('https://uploader.test/v1/admin/retry',{
     method:'POST',headers:{Authorization:`Bearer ${adminToken}`},
@@ -49,17 +53,19 @@ try {
   if (delivered.archived !== 1) console.log('Delivery diagnostic', delivered, await db.prepare('SELECT state,last_error,attempts FROM batches').first());
   assert.equal(delivered.archived,1); assert.equal(puts,1);
   assert.equal((await send()).status,200); assert.equal(puts,1);
-  const r = await mf.dispatchFetch(`https://uploader.test/v1/workout-batches/${receipt.batch_id}`,{
+  const r = await mf.dispatchFetch(`https://uploader.test/v1/batches/${receipt.batch_id}`,{
     headers:{Authorization:`Bearer ${adminToken}`},
   });
   const final = await r.json() as {status:string,commit_sha:string};
   assert.equal(final.status,'archived'); assert.equal(final.commit_sha,commitSha);
+  assert.ok(files.has(`/repos/example/private-vault/contents/${stored.archive_path}`));
   const archive = JSON.parse(Buffer.from([...files.values()][0]!,'base64').toString('utf8'));
   assert.equal(archive.workouts[0].raw.duration,'3,488.907 sec');
   assert.equal(archive.workouts[0].normalized.start.utc,'2026-10-15T15:31:00.000Z');
   // 100 actual workouts with different IDs exercise maximum count in workerd/D1.
   const max = await send(Array.from({length:100},(_,i)=>workout({identifier:`00000000-0000-0000-0000-${String(i+100).padStart(12,'0')}`})));
   assert.equal(max.status,202);
+  assert.equal((await max.json() as {record_count:number}).record_count,100);
   rateLimited = true; await retry();
   assert.ok((await db.prepare('SELECT not_before FROM delivery_backoff').first())!.not_before > Date.now());
   rateLimited = false;

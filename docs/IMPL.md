@@ -15,11 +15,13 @@ a TypeScript-specific algorithm.
 | File | Responsibility |
 |---|---|
 | [src/index.ts](../src/index.ts) | Configuration checks, authentication, bounded body reader, HTTP routing, sanitized responses, scheduled entry point. |
-| [src/normalize.ts](../src/normalize.ts) | Field validation, quantity/flag/date parsing, timezone resolution, bounded date caches, canonical serialization, SHA-256. |
+| [src/sources.ts](../src/sources.ts) | Server-owned adapter registry, source-scoped batch identity, immutable envelope and archive-path construction. |
+| [src/sources/apple-health.ts](../src/sources/apple-health.ts) | Apple Health adapter, field validation, quantity/flag/date parsing, timezone resolution, bounded date caches, source limits and versions. |
+| [src/json.ts](../src/json.ts) | Canonical JSON serialization and SHA-256 shared by all sources. |
 | [src/store.ts](../src/store.ts) | Atomic acceptance/capacity check, receipts, rate limits, lease operations, cleanup, upload health/status queries. |
 | [src/deliver.ts](../src/deliver.ts) | Delivery loop, lease fencing, retry timing, shared GitHub cooldown, recording archival/failure. |
 | [src/github.ts](../src/github.ts) | GitHub API client, private destination check, immutable create, existing-content verification, commit recovery, delivery errors. |
-| [src/types.ts](../src/types.ts) | Environment/batch types, HTTP errors, limits, archive prefix, normalization version. |
+| [src/types.ts](../src/types.ts) | Environment, source adapter and generic batch types, HTTP errors, shared limits. |
 | [migrations/0001_inbox.sql](../migrations/0001_inbox.sql) | D1 tables and delivery index. |
 | [wrangler.jsonc](../wrangler.jsonc) | Entry point, runtime compatibility date, D1 binding, destination vars, cron, logging. |
 | [scripts/wrangler.mjs](../scripts/wrangler.mjs) | Wrapper used by npm commands; runs installed Wrangler from project root and keeps config/logs under `.wrangler/` by default. |
@@ -67,7 +69,8 @@ upload UI or CORS configuration; the client is Shortcuts or an HTTP tool.
 | Method and route | Credential | Result |
 |---|---|---|
 | `POST /v1/workout-batches` | Upload | Validate and save `{"workouts":[...]}`. JSON content type required. |
-| `GET /v1/workout-batches/<batch-id>` | Admin | Receipt metadata; ID must be 64 lowercase hexadecimal characters. Unknown valid ID returns 404. |
+| `GET /v1/batches/<batch-id>` | Admin | Receipt metadata for any source; ID must be 64 lowercase hexadecimal characters. Unknown valid ID returns 404. |
+| `GET /v1/workout-batches/<batch-id>` | Admin | Compatibility receipt route for Apple Health; other-source receipts return 404. |
 | `GET /v1/status` | Admin | Inbox counts, retained bytes, upload/archive timestamps, cooldown, health flags. |
 | `POST /v1/admin/retry` | Admin | Requeue all failed/retrying batches, then attempt up to three due batches. No request body required. |
 
@@ -90,7 +93,8 @@ New batches normally return HTTP 202 and a receipt shaped like:
 {
   "batch_id": "<64-character hash>",
   "status": "queued",
-  "workout_count": 10,
+  "source": "apple_health",
+  "record_count": 10,
   "received_at": "2026-10-20T12:54:05.453Z",
   "archived_at": null,
   "commit_sha": null,
@@ -100,12 +104,41 @@ New batches normally return HTTP 202 and a receipt shaped like:
 
 Duplicate uploads reuse the original receipt, with HTTP 200 if archived and 202
 otherwise (including `retrying` or `failed`). An empty list returns HTTP 200 with
-`{"status":"empty","workout_count":0}` and creates no batch. Successful empty
+`{"status":"empty","source":"apple_health","record_count":0}` and creates no batch. Successful empty
 and duplicate uploads refresh upload health. `202` alone does not guarantee the
 receipt is currently queued; inspect its `status` and `error`.
 
 Receipt GET returns the same metadata. An archived receipt includes `archived_at`
 and the actual GitHub commit SHA. No read endpoint returns workout payloads.
+Receipts use `record_count` in place of the original `workout_count`; consumers
+reading that response field need to switch. The Apple Health request body is
+unchanged.
+
+### Adding a JSON source
+
+Implement a `SourceAdapter` under `src/sources/` and register it in the server-owned
+list in `src/sources.ts`. Give it a stable source ID, a distinct upload path, and a
+trusted vault archive prefix. Its normalizer must validate the complete input,
+enforce source-specific record limits, and return:
+
+- `recordCount`: the number of accepted records (zero is a successful no-op).
+- `identity`: canonicalizable JSON fields determining equivalent uploads, including
+  schema/normalization versions where applicable. Normalize record order here if
+  order should not affect identity.
+- `payload`: the source's archive fields, preserving raw data and interpretation
+  metadata as needed. Shared code adds `batch_id` and `received_at`.
+
+New source IDs are SHA-256 of canonical `{source: <adapter ID>, input: <identity>}`.
+Leave `legacyBatchIdentity` unset; it is reserved for preserving Apple Health's
+original IDs. The shared builder stores the source, generic count, exact envelope
+hash, and full archive path in D1. Delivery needs no adapter lookup or workout
+knowledge, and `GET /v1/batches/<batch-id>` works for every source.
+
+Only registered upload paths are served. There is no arbitrary JSON passthrough
+endpoint. Global upload/admin rate limits, capacity limits, upload freshness, and
+destination-wide delivery backoff remain shared. Before adding independently
+scheduled sources, add per-source freshness checks so one source's activity cannot
+hide another's stalled uploads. Reporting integration remains a separate importer.
 
 | HTTP status | Error category / representative code |
 |---|---|
@@ -180,7 +213,7 @@ when both instants resolve. Formatter and offset caches are bounded.
 
 ### Batch identity and envelope
 
-Sort object keys recursively and workouts by normalized UUID. The batch ID is
+For Apple Health, sort object keys recursively and workouts by normalized UUID. The batch ID is
 SHA-256 of canonical `{schema_version, normalization_version, timezone_assumed,
 workouts: <sorted raw workouts>}`. Schema and normalization versions are currently
 1. Raw values, including UUID spelling, are preserved in this hash input; changing
@@ -205,7 +238,7 @@ across batches or deduplicate them against the existing analysis database.
 
 | Table | Stored state |
 |---|---|
-| `batches` | ID/hash, immutable envelope, bytes/count, receipt times, queued/retrying/failed/archived state, attempts, next attempt, error, commit SHA. |
+| `batches` | ID/hash, source, generic record count, frozen archive path, immutable envelope, bytes, receipt times, queued/retrying/failed/archived state, attempts, next attempt, error, commit SHA. |
 | `delivery_lease` | Singleton owner token and expiry; 120-second lease renewed before each batch. |
 | `rate_windows` | Per-role fixed-minute request counter. |
 | `upload_health` | Singleton last successful upload time, including empty/duplicate uploads. |
@@ -213,6 +246,25 @@ across batches or deduplicate them against the existing analysis database.
 
 `batches_due` indexes state, next attempt, and received time. Retry/cooldown/lease
 times use epoch milliseconds; receipt timestamps use ISO strings.
+
+The initial `0001_inbox.sql` schema uses `source`, `record_count`, and
+`archive_path`; it contains no workout-specific columns. This initial-schema
+change targets a newly created D1 database with no migrations applied. Creating
+the named database alone is sufficient preparation; `npm run db:remote` applies
+the schema during setup. No existing data needs migration in that case.
+
+An already initialized local or remote database will not be upgraded by editing
+`0001`: Wrangler records which migrations have run. Preserve any existing receipts
+and pending envelopes and arrange an explicit schema upgrade before using this
+code against that database. For fresh local development while retaining an old
+local inbox, use a separate persistence directory for both commands:
+
+```sh
+npm run db:local -- --persist-to .wrangler/state-generic
+npm run dev -- --persist-to .wrangler/state-generic
+```
+
+That separate inbox does not deliver batches from the retained old local state.
 
 Acceptance uses a single `INSERT … SELECT` capacity check with conflict handling,
 then reads the durable row. Limits are 32 MiB of retained envelope bytes and 50,000
@@ -229,7 +281,7 @@ acknowledge a newer owner's work.
 For each batch, the GitHub adapter:
 
 1. Fetches repository metadata and requires `private: true` before sending content.
-2. Fetches the immutable archive path on the configured branch.
+2. Fetches the batch's persisted immutable archive path on the configured branch.
 3. If present, decodes base64 and checks exact envelope hash; on a match it fetches
    path history to obtain the actual commit SHA (the Contents API SHA is a blob SHA).
 4. If absent, calls the Contents API to create the file, without an update SHA.

@@ -13,7 +13,9 @@ export interface Batch {
   archive_hash: string;
   envelope: string | null;
   payload_bytes: number;
-  workout_count: number;
+  source: string;
+  record_count: number;
+  archive_path: string;
   received_at: string;
   state: 'queued' | 'retrying' | 'failed' | 'archived';
   attempts: number;
@@ -31,8 +33,22 @@ export class HttpError extends Error {
   }
 }
 export const MAX_BYTES = 256 * 1024;
-export const MAX_WORKOUTS = 100;
 export const MAX_PENDING_BYTES = 32 * 1024 * 1024;
 export const MAX_RECEIPTS = 50_000;
-export const ARCHIVE_PREFIX = 'files/apple_health/actions/batches/';
-export const NORMALIZATION_VERSION = 1;
+
+export type NewBatch = Pick<Batch, 'id' | 'source' | 'record_count' | 'archive_path' |
+  'archive_hash' | 'envelope' | 'received_at'> & { envelope: string };
+
+export interface NormalizedBatch {
+  recordCount: number;
+  identity: Record<string, unknown>;
+  payload: Record<string, unknown>;
+}
+export interface SourceAdapter {
+  id: string;
+  uploadPath: string;
+  archivePrefix: string;
+  normalize(input: unknown, zone: string): NormalizedBatch;
+  // Compatibility exception for the original Apple Health batch IDs only.
+  legacyBatchIdentity?: boolean;
+}

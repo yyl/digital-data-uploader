@@ -1,6 +1,7 @@
 import type { Env } from './types.ts';
 import { HttpError, MAX_BYTES } from './types.ts';
-import { canonical, normalize, sha256 } from './normalize.ts';
+import { sha256 } from './json.ts';
+import { createBatch, getUploadSource } from './sources.ts';
 import { accept, getBatch, rateLimit, receipt, status, recordUpload } from './store.ts';
 import { deliver } from './deliver.ts';
 
@@ -69,26 +70,22 @@ export async function handle(request: Request, env: Env) {
     checkConfig(env);
     const url = new URL(request.url);
     if (url.search) throw new HttpError(400, 'query_not_supported');
-    if (url.pathname === '/v1/workout-batches' && request.method === 'POST') {
+    const source = getUploadSource(url.pathname);
+    if (source && request.method === 'POST') {
       await authenticate(request, env, 'upload');
       const zone = env.ASSUMED_TIMEZONE || 'America/Los_Angeles';
-      const result = normalize(await body(request), zone);
-      if (!result.workouts.length) {
+      const result = source.normalize(await body(request), zone);
+      if (!result.recordCount) {
         await recordUpload(env);
-        return reply({ status: 'empty', workout_count: 0 });
+        return reply({ status: 'empty', source: source.id, record_count: 0 });
       }
-      const id = await sha256(canonical({ schema_version: result.schema_version,
-        normalization_version: result.normalization_version, timezone_assumed: zone, ...result.input }));
-      const existing = await getBatch(env, id);
+      const batch = await createBatch(source, result);
+      const existing = await getBatch(env, batch.id);
       if (existing) {
         await recordUpload(env);
         return reply(receipt(existing), existing.state === 'archived' ? 200 : 202);
       }
-      const now = new Date().toISOString();
-      const envelope = canonical({ batch_id: id, received_at: now,
-        schema_version: result.schema_version, normalization_version: result.normalization_version,
-        timezone_assumed: zone, warnings: result.warnings, workouts: result.workouts });
-      const b = await accept(env, id, envelope, await sha256(envelope), result.workouts.length, now);
+      const b = await accept(env, batch);
       await recordUpload(env);
       return reply(receipt(b), 202);
     }
@@ -97,11 +94,11 @@ export async function handle(request: Request, env: Env) {
       await authenticate(request, env, 'admin');
       return reply(await status(env));
     }
-    const match = /^\/v1\/workout-batches\/([a-f0-9]{64})$/.exec(url.pathname);
+    const match = /^\/v1\/(batches|workout-batches)\/([a-f0-9]{64})$/.exec(url.pathname);
     if (match && request.method === 'GET') {
       await authenticate(request, env, 'admin');
-      const b = await getBatch(env, match[1]!);
-      if (!b) throw new HttpError(404, 'batch_not_found');
+      const b = await getBatch(env, match[2]!);
+      if (!b || (match[1] === 'workout-batches' && b.source !== 'apple_health')) throw new HttpError(404, 'batch_not_found');
       return reply(receipt(b));
     }
     if (url.pathname === '/v1/admin/retry' && request.method === 'POST') {

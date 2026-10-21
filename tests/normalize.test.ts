@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { normalize, parseDate, canonical, sha256 } from '../src/normalize.ts';
+import { normalize, parseDate } from '../src/sources/apple-health.ts';
+import { canonical, sha256 } from '../src/json.ts';
 import { workout } from './helpers.ts';
 const zone = 'America/Los_Angeles';
 

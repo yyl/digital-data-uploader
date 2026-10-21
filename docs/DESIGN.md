@@ -1,4 +1,4 @@
-# Apple Health workout uploader design
+# JSON source uploader design
 
 This document describes the system boundaries and behavior. Exact APIs,
 configuration, code paths, and test procedures belong in [IMPL.md](IMPL.md).
@@ -6,14 +6,27 @@ User setup and everyday usage belong in the [README](../README.md).
 
 ## Purpose and scope
 
-Automate archiving Apple Health workout summaries from Actions + iPhone Shortcuts
-into the private `digital-data-vault` repository. All validation and processing
-belong on the server; the Shortcut sends the JSON it already produces.
+Automate archiving source JSON into the private `digital-data-vault` repository.
+Apple Health workout summaries from Actions + iPhone Shortcuts are the first
+supported source. All validation and processing belong on the server; the
+Shortcut sends the JSON it already produces.
 
 The uploader is a standalone project. It accepts summaries and delivers archives;
 the later `digital-data-dump` importer owns analysis and database reconciliation.
 Summary uploads supplement the existing filtered XML archive, which contains
 richer workout data and associated Health records.
+
+Source adapters own their input validation, normalization, record count, identity
+fields, upload route, and vault directory. Shared code owns authentication,
+bounded JSON reading, batch construction, D1 acceptance, receipts, retries, and
+GitHub delivery. The server registers supported adapters explicitly; clients
+cannot supply arbitrary sources or archive paths.
+
+The shared inbox stores `source`, `record_count`, and an immutable `archive_path`
+alongside each envelope. Delivery uses that saved path, so a later adapter routing
+change cannot redirect queued work. Adding a source does not require adding
+source-specific D1 columns. It still needs an adapter, tests, and a separate
+`digital-data-dump` importer if it should appear in reports.
 
 Local phone ingestion and manual GitHub delivery have been verified. Cloud
 deployment, automatic delivery on Cloudflare, and locked/unlocked scheduled phone
@@ -79,6 +92,10 @@ key order or workout order. Identical uploads reuse their durable receipt.
 Changed values or a different rolling window produce separate immutable
 snapshots. Individual-workout deduplication across snapshots belongs to the
 future importer. Empty uploads never imply deletions.
+
+New adapters namespace batch identities by source. Apple Health keeps its original
+identity algorithm and archive format for compatibility with local archives and
+the downstream importer. Shared receipts expose `source` and `record_count`.
 
 ## Reliability and privacy
 

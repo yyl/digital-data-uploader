@@ -4,7 +4,7 @@ import { handle } from '../src/index.ts';
 import { deliver } from '../src/deliver.ts';
 import { archive, toBase64 } from '../src/github.ts';
 import { acquireLease, renewLease, releaseLease, cleanup } from '../src/store.ts';
-import { sha256 } from '../src/normalize.ts';
+import { sha256 } from '../src/json.ts';
 import { environment, upload, workout, commitSha } from './helpers.ts';
 import type { Batch } from '../src/types.ts';
 import type { Fetch } from '../src/github.ts';
