@@ -1,5 +1,6 @@
 import type { Batch, Env } from './types.ts';
 import { sha256 } from './json.ts';
+import { STRONG_PATH } from './sources/strong.ts';
 
 export class DeliveryError extends Error {
   code: string;
@@ -100,4 +101,38 @@ export async function archive(env: Env, b: Batch, request: Fetch = fetch): Promi
     throw new DeliveryError('github_invalid_response');
   }
   return result.commit.sha;
+}
+
+// Full Strong exports replace one server-owned path. Never use this for batches.
+export async function replaceStrongExport(env: Env, csv: string, request: Fetch = fetch) {
+  const repository = await api(env, '', {}, request);
+  if (!repository.ok) failure(repository);
+  if ((await data(repository)).private !== true) throw new DeliveryError('destination_not_private', true);
+  const contentPath = `contents/${STRONG_PATH}`;
+  const existing = await api(env, `${contentPath}?ref=${encodeURIComponent(env.GITHUB_BRANCH)}`, {}, request);
+  const content = toBase64(csv);
+  let sha: string | undefined;
+  if (existing.ok) {
+    const info = await data(existing);
+    if (info.type !== 'file' || info.encoding !== 'base64' || typeof info.content !== 'string' ||
+        typeof info.sha !== 'string' || !/^[a-f0-9]{40}$/.test(info.sha)) {
+      throw new DeliveryError('archive_content_unverifiable', true);
+    }
+    sha = info.sha;
+    if (info.content.replace(/\s/g, '') === content) {
+      return { status: 'unchanged' as const };
+    }
+  } else if (existing.status !== 404) failure(existing);
+  // The observed blob SHA protects against concurrent updates. Return a conflict
+  // to the caller rather than silently overwriting a file changed since our GET.
+  const saved = await api(env, contentPath, {
+    method: 'PUT', body: JSON.stringify({ message: 'Update Strong workout export',
+      branch: env.GITHUB_BRANCH, content, ...(sha ? { sha } : {}) }),
+  }, request);
+  if (!saved.ok) failure(saved);
+  const result = await data(saved);
+  if (typeof result.commit?.sha !== 'string' || !/^[a-f0-9]{40}$/.test(result.commit.sha)) {
+    throw new DeliveryError('github_invalid_response');
+  }
+  return { status: 'saved' as const, commit_sha: result.commit.sha as string };
 }

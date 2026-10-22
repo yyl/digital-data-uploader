@@ -1,13 +1,13 @@
 # digital-data-uploader
 
-Upload JSON from supported sources and save it in your private `digital-data-vault`
-GitHub repository. Apple Health workout summaries from an iPhone Shortcut are the
-first supported source. The server processes the Shortcut's existing JSON; the
-phone only finds workouts, builds JSON, and sends it.
+Upload Apple Health JSON summaries or a full Strong CSV export to your private
+`digital-data-vault` GitHub repository. Apple Health uses a durable inbox and
+immutable archives. Strong saves the original CSV directly to one replaceable file.
 
-Phone uploads and manual delivery to the vault have been tested locally. Cloud
-deployment and scheduled phone runs still need verification. Importing these
-files into `digital-data-dump` reports is a separate, future step.
+Apple Health phone uploads and manual delivery to the vault have been tested
+locally. A Strong phone upload to the local server returned HTTP 200, and mocked
+Worker integration tests cover its GitHub delivery. Cloud deployment and scheduled
+phone runs still need verification.
 
 ## Set up and run
 
@@ -31,7 +31,52 @@ npm run dev -- --ip 0.0.0.0
 Keep the terminal open while testing. For an internet-accessible endpoint, follow
 the [Cloudflare deployment steps](docs/IMPL.md#cloudflare-deployment).
 
+## Upload a Strong export
+
+Export your complete workout history from Strong and send the CSV file to
+`POST /v1/strong-export`. The server checks its CSV structure and required headers,
+then saves the original bytes to `files/strong_workouts.csv` in the configured
+private vault branch. Each changed export replaces that file; Git history retains
+previous versions. There is no workout normalization or analysis in this route.
+
+Create a Shortcut that receives **Files** from the share sheet (or selects the
+export with **Select File**), followed by **Get Contents of URL**:
+
+| Setting | Value |
+|---|---|
+| URL | `https://<YOUR-WORKER>/v1/strong-export` (local: `http://<MAC_NETWORK_IP>:8787/v1/strong-export`) |
+| Method | `POST` |
+| Header `Authorization` | `Bearer YOUR_UPLOAD_TOKEN` |
+| Header `Content-Type` | `text/csv` |
+| Request Body | **File**, selecting the exported CSV / Shortcut Input |
+
+Enable **Show in Share Sheet** for the Shortcut and share the exported CSV from
+Strong or Files. Send one file directly, without converting it into JSON or a
+multipart form. Add **Show Result** after the request.
+
+The server requires `Content-Type: text/csv` and validates the CSV contents.
+A missing or different type returns 415 `expected_csv`. Set that header explicitly
+in the Shortcut and use Request Body **File**. JSON-wrapped files are invalid CSV.
+
+HTTP 200 with `status: saved` means GitHub confirmed the commit; the response
+includes `commit_sha`. `status: unchanged` means the same bytes are already saved
+and no commit was made. The file limit is 512 KiB. Empty/header-only exports,
+malformed CSV and missing required headers are rejected before saving.
+
+Strong uses D1 only for the shared upload rate limit. It has no pending batch,
+receipt lookup, scheduled delivery or automatic retry. On an HTTP error, keep the
+export and resend it; respect `Retry-After` when present. A conflict (409) means
+the destination changed during the upload: check the latest export before retrying.
+Always select the latest full export, since a successful upload replaces the
+current file. Strong uploads do not refresh Apple Health's upload-health timestamp.
+
+`digital-data-dump` already reads this filename through `strong-sync` and
+`strong-analyze`; uploading does not run those commands. Its published workout
+metrics continue to use Apple Health.
+
 ## Connect your iPhone
+
+These settings are for Apple Health; Strong uses the CSV upload instructions above.
 
 Keep the working **Find Workout → Repeat → dictionaries → JSON text** sequence,
 producing `{"workouts":[...]}`. Start with a rolling 60-day window; use smaller

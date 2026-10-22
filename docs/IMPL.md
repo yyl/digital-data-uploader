@@ -15,12 +15,14 @@ a TypeScript-specific algorithm.
 | File | Responsibility |
 |---|---|
 | [src/index.ts](../src/index.ts) | Configuration checks, authentication, bounded body reader, HTTP routing, sanitized responses, scheduled entry point. |
+| [src/body.ts](../src/body.ts) | Shared bounded streaming reader with byte caps and timeout. |
 | [src/sources.ts](../src/sources.ts) | Server-owned adapter registry, source-scoped batch identity, immutable envelope and archive-path construction. |
 | [src/sources/apple-health.ts](../src/sources/apple-health.ts) | Apple Health adapter, field validation, quantity/flag/date parsing, timezone resolution, bounded date caches, source limits and versions. |
+| [src/sources/strong.ts](../src/sources/strong.ts) | Strong CSV structure/header validation, unchanged UTF-8 decoding, fixed destination and file limit. |
 | [src/json.ts](../src/json.ts) | Canonical JSON serialization and SHA-256 shared by all sources. |
 | [src/store.ts](../src/store.ts) | Atomic acceptance/capacity check, receipts, rate limits, lease operations, cleanup, upload health/status queries. |
 | [src/deliver.ts](../src/deliver.ts) | Delivery loop, lease fencing, retry timing, shared GitHub cooldown, recording archival/failure. |
-| [src/github.ts](../src/github.ts) | GitHub API client, private destination check, immutable create, existing-content verification, commit recovery, delivery errors. |
+| [src/github.ts](../src/github.ts) | GitHub API client, private destination check, immutable batch archives, direct Strong file replacement, delivery errors. |
 | [src/types.ts](../src/types.ts) | Environment, source adapter and generic batch types, HTTP errors, shared limits. |
 | [migrations/0001_inbox.sql](../migrations/0001_inbox.sql) | D1 tables and delivery index. |
 | [wrangler.jsonc](../wrangler.jsonc) | Entry point, runtime compatibility date, D1 binding, destination vars, cron, logging. |
@@ -69,6 +71,7 @@ upload UI or CORS configuration; the client is Shortcuts or an HTTP tool.
 | Method and route | Credential | Result |
 |---|---|---|
 | `POST /v1/workout-batches` | Upload | Validate and save `{"workouts":[...]}`. JSON content type required. |
+| `POST /v1/strong-export` | Upload | Validate a raw UTF-8 CSV and synchronously replace `files/strong_workouts.csv`. |
 | `GET /v1/batches/<batch-id>` | Admin | Receipt metadata for any source; ID must be 64 lowercase hexadecimal characters. Unknown valid ID returns 404. |
 | `GET /v1/workout-batches/<batch-id>` | Admin | Compatibility receipt route for Apple Health; other-source receipts return 404. |
 | `GET /v1/status` | Admin | Inbox counts, retained bytes, upload/archive timestamps, cooldown, health flags. |
@@ -80,7 +83,43 @@ shared by role. Rejected authenticated requests also consume this allowance.
 429 responses include `Retry-After: 60`. Unauthenticated abuse requires separate
 edge controls if needed.
 
-### Request validation and responses
+### Strong CSV upload
+
+Send one raw CSV file with `Content-Type` exactly `text/csv`. A missing or
+different value, including parameters such as `charset=utf-8`, returns 415
+`expected_csv`, even for valid CSV bytes. Actual CSV structure is also validated;
+JSON-wrapped files fail CSV validation even when labeled `text/csv`.
+The shared reader enforces a 512 KiB limit on declared and actual bytes, no
+compression, and a ten-second body timeout. JSON uploads retain their 256 KiB cap.
+
+The validator checks CSV quoting, consistent row widths, unique headers, at least
+one data row, and nonempty dates. Required columns are `Date`, `Workout Name`,
+`Duration`, `Exercise Name`, `Set Order`, `Weight`, `Reps`, `Distance`, `Seconds`.
+Additional columns are retained. Quoted commas/newlines, escaped quotes, Unicode,
+CRLF and a UTF-8 BOM are supported. No dates, measurements or workout identities
+are interpreted; validated bytes are saved unchanged. The upload must be a full
+export; the server cannot detect a valid but incomplete selection of workouts.
+
+`replaceStrongExport` verifies the private destination, GETs the fixed path in the
+configured branch, and compares the base64 bytes. Identical contents return HTTP
+200 with `{"status":"unchanged","source":"strong","path":"files/strong_workouts.csv"}`
+without a commit. Changed contents are PUT with the observed blob SHA; a missing
+file is created without a SHA. Success returns HTTP 200 with `status: saved`,
+`source`, `path`, and `commit_sha`. Git history retains replaced versions.
+
+An update/create conflict returns 409 without automatically retrying stale bytes.
+GitHub network, access, rate-limit, malformed-response and destination errors
+return 503 with a fixed error code; rate-limit errors include `Retry-After`.
+The caller must retry failed exports. If a commit succeeded but its response was
+lost, resending identical bytes returns `unchanged`.
+
+This route shares configuration, authentication and the D1-backed upload rate
+limit. It writes no batch, payload, receipt or upload-health row and does not run
+the delivery loop. `/v1/status` and admin retry remain batch/Apple Health tools;
+Strong has no stored status, automatic retry, or independent freshness monitor.
+There are no D1 schema changes or new settings.
+
+### JSON request validation and responses
 
 The upload reader accepts uncompressed UTF-8 JSON (`Content-Encoding` absent or
 `identity`). It checks both declared length and actual streamed bytes, caps the
@@ -142,15 +181,16 @@ hide another's stalled uploads. Reporting integration remains a separate importe
 
 | HTTP status | Error category / representative code |
 |---|---|
-| 400 | Malformed JSON/read failure (`invalid_json`, `body_read_failed`), query string (`query_not_supported`). |
+| 400 | Malformed JSON/UTF-8/read failure (`invalid_json`, `invalid_utf8`, `body_read_failed`, `empty_body`), query string (`query_not_supported`). |
 | 401 | Missing/wrong role credential (`unauthorized`). |
 | 404 | Unknown route or receipt (`route_not_found`, `batch_not_found`). |
 | 408 | Body timeout (`body_read_timeout`). |
+| 409 | Strong file changed concurrently (`github_branch_conflict`, `github_create_conflict`); review before resending. |
 | 413 | Byte/count cap (`body_too_large`, `too_many_workouts`). |
-| 415 | Media type/encoding (`expected_application_json`, `unsupported_content_encoding`). |
-| 422 | Schema/value problem (`invalid_field`, `duplicate_identifier`), with `field` path. |
+| 415 | Media type/encoding (`expected_application_json`, `expected_csv`, `unsupported_content_encoding`). |
+| 422 | JSON schema/value problem (`invalid_field`, `duplicate_identifier`), with `field` path; invalid Strong CSV/header or empty export. |
 | 429 | Authenticated role rate limit (`rate_limited`). |
-| 503 | Configuration (`service_not_configured`), capacity (`inbox_capacity_reached`), or sanitized unexpected failure (`internal_error`). |
+| 503 | Configuration (`service_not_configured`), capacity (`inbox_capacity_reached`), Strong GitHub delivery error, or sanitized unexpected failure (`internal_error`). |
 
 Errors have `{"error":"<code>"}` and, when applicable, `"field"`. No exception
 details, SQL bindings, payloads, or credentials are returned or logged. If a

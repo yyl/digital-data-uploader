@@ -4,6 +4,10 @@ import { sha256 } from './json.ts';
 import { createBatch, getUploadSource } from './sources.ts';
 import { accept, getBatch, rateLimit, receipt, status, recordUpload } from './store.ts';
 import { deliver } from './deliver.ts';
+import { readBody } from './body.ts';
+import { readStrongCsv, STRONG_PATH, MAX_STRONG_BYTES } from './sources/strong.ts';
+import { replaceStrongExport, DeliveryError } from './github.ts';
+import type { Fetch } from './github.ts';
 
 function reply(body: unknown, status = 200) {
   return Response.json(body, { status, headers: { 'Cache-Control': 'no-store',
@@ -33,43 +37,31 @@ async function body(request: Request) {
   if ((request.headers.get('Content-Type') ?? '').split(';')[0]?.trim().toLowerCase() !== 'application/json') {
     throw new HttpError(415, 'expected_application_json');
   }
-  if (request.headers.has('Content-Encoding') && request.headers.get('Content-Encoding') !== 'identity') {
-    throw new HttpError(415, 'unsupported_content_encoding');
-  }
-  const claimed = request.headers.get('Content-Length');
-  if (claimed && (!/^\d+$/.test(claimed) || Number(claimed) > MAX_BYTES)) throw new HttpError(413, 'body_too_large');
   if (!request.body) throw new HttpError(400, 'invalid_json');
-  const reader = request.body.getReader(), chunks: Uint8Array[] = [];
-  let bytes = 0;
-  let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
-    void reader.cancel().catch(() => {});
-  }, 10000);
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (timedOut) throw new HttpError(408, 'body_read_timeout');
-      if (done) break;
-      bytes += value.byteLength;
-      if (bytes > MAX_BYTES) { await reader.cancel(); throw new HttpError(413, 'body_too_large'); }
-      chunks.push(value);
-    }
-  } catch (error) {
-    if (error instanceof HttpError) throw error;
-    throw new HttpError(400, 'body_read_failed');
-  } finally { clearTimeout(timer); reader.releaseLock(); }
-  const buffer = new Uint8Array(bytes);
-  let offset = 0;
-  for (const chunk of chunks) { buffer.set(chunk, offset); offset += chunk.byteLength; }
+  const buffer = await readBody(request, MAX_BYTES);
   try { return JSON.parse(new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(buffer)); }
   catch { throw new HttpError(400, 'invalid_json'); }
 }
-export async function handle(request: Request, env: Env) {
+export async function handle(request: Request, env: Env, githubRequest: Fetch = fetch) {
   try {
     checkConfig(env);
     const url = new URL(request.url);
     if (url.search) throw new HttpError(400, 'query_not_supported');
+    if (url.pathname === '/v1/strong-export' && request.method === 'POST') {
+      await authenticate(request, env, 'upload');
+      const csv = await readStrongCsv(request, await readBody(request, MAX_STRONG_BYTES));
+      try {
+        const result = await replaceStrongExport(env, csv, githubRequest);
+        return reply({ ...result, source: 'strong', path: STRONG_PATH });
+      } catch (error) {
+        if (!(error instanceof DeliveryError)) throw error;
+        // No inbox acceptance: clients must retry a failed full export themselves.
+        const conflict = ['github_branch_conflict', 'github_create_conflict'].includes(error.code);
+        const response = reply({ error: error.code }, conflict ? 409 : 503);
+        if (error.retryAfterMs) response.headers.set('Retry-After', String(Math.ceil(error.retryAfterMs / 1000)));
+        return response;
+      }
+    }
     const source = getUploadSource(url.pathname);
     if (source && request.method === 'POST') {
       await authenticate(request, env, 'upload');
@@ -117,7 +109,7 @@ export async function handle(request: Request, env: Env) {
   }
 }
 export default {
-  fetch: handle,
+  fetch(request: Request, env: Env) { return handle(request, env); },
   async scheduled(_event: ScheduledController, env: Env, _ctx: ExecutionContext) {
     try {
       checkConfig(env);

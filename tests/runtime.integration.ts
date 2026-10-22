@@ -24,7 +24,7 @@ const mf = new Miniflare(convertV4MiniflareOptions({
       return MFResponse.json({commit:{sha:commitSha}}, {status:201});
     }
     const content = files.get(url.pathname);
-    return content ? MFResponse.json({type:'file',encoding:'base64',content}) : new MFResponse('',{status:404});
+    return content ? MFResponse.json({type:'file',encoding:'base64',content,sha:'b'.repeat(40)}) : new MFResponse('',{status:404});
   },
 }));
 try {
@@ -73,5 +73,34 @@ try {
   await db.prepare('UPDATE delivery_backoff SET not_before=0').run();
   assert.equal((await (await retry()).json() as {archived:number}).archived,1);
   assert.equal(puts,2);
+  const csv = '\uFEFFDate,Workout Name,Duration,Exercise Name,Set Order,Weight,Reps,Distance,Seconds\r\n2026-10-20 08:00:00,Morning,45m,Squat,1,60,8,0,0\r\n';
+  const strong = (body = csv, type = 'text/csv') => mf.dispatchFetch('https://uploader.test/v1/strong-export', {
+    method:'POST', headers:{Authorization:`Bearer ${uploadToken}`,'Content-Type':type}, body,
+  });
+  const before = await db.prepare('SELECT COUNT(*) n FROM batches').first();
+  const health = await db.prepare('SELECT last_upload_at FROM upload_health').first();
+  assert.equal((await strong()).status,200);
+  assert.equal(puts,3);
+  const strongPath = '/repos/example/private-vault/contents/files/strong_workouts.csv';
+  assert.equal(Buffer.from(files.get(strongPath)!,'base64').toString('utf8'),csv);
+  assert.equal((await (await strong()).json() as {status:string}).status,'unchanged');
+  const wrongType = await strong(csv, 'application/vnd.ms-excel');
+  assert.equal(wrongType.status,415);
+  assert.deepEqual(await wrongType.json(),{error:'expected_csv'});
+  assert.equal(puts,3);
+  const changed = csv.replace(',60,8,',',70,8,');
+  assert.equal((await strong(changed)).status,200);
+  assert.equal(puts,4);
+  assert.equal(Buffer.from(files.get(strongPath)!,'base64').toString('utf8'),changed);
+  const wrapped = await strong(JSON.stringify({csv}), 'application/json');
+  assert.equal(wrapped.status,415);
+  assert.equal(puts,4);
+  githubDown = true;
+  assert.equal((await strong()).status,503);
+  githubDown = false;
+  assert.equal(Buffer.from(files.get(strongPath)!,'base64').toString('utf8'),changed);
+  assert.equal((await db.prepare('SELECT COUNT(*) n FROM batches').first())!.n,before!.n);
+  assert.equal((await db.prepare('SELECT last_upload_at FROM upload_health').first())!.last_upload_at,health!.last_upload_at);
+  console.log('Strong integration passed: raw CSV create, overwrite, BOM preservation, strict text/csv, JSON rejection, identical no-op and visible outage without inbox or Apple Health health writes.');
   console.log('Worker/D1 integration passed: durable upload, outage, retry, GitHub archive, duplicate receipt, 100-workout batch, and shared rate-limit cooldown. All GitHub traffic mocked.');
 } finally { await mf.dispose(); }

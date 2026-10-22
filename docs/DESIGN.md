@@ -1,4 +1,4 @@
-# JSON source uploader design
+# Source uploader design
 
 This document describes the system boundaries and behavior. Exact APIs,
 configuration, code paths, and test procedures belong in [IMPL.md](IMPL.md).
@@ -10,6 +10,15 @@ Automate archiving source JSON into the private `digital-data-vault` repository.
 Apple Health workout summaries from Actions + iPhone Shortcuts are the first
 supported source. All validation and processing belong on the server; the
 Shortcut sends the JSON it already produces.
+
+Full Strong CSV exports use a separate synchronous upload route. The Worker
+validates the CSV structure and saves the original bytes to the single existing
+`files/strong_workouts.csv` path, replacing its contents when changed. Git history
+retains earlier versions. D1 is used only for the shared upload rate limit;
+Strong has no inbox payload, batch receipt, scheduled delivery or normalization.
+The caller gets success after GitHub confirms the write (or identical existing
+bytes) and must resend failed exports. Concurrent changes cause a visible
+conflict. Strong activity does not refresh Apple Health upload freshness.
 
 The uploader is a standalone project. It accepts summaries and delivers archives;
 the later `digital-data-dump` importer owns analysis and database reconciliation.
@@ -70,9 +79,10 @@ D1 separates acceptance from GitHub availability. The phone can finish once the
 server has saved its data; delivery failures are handled by the Worker. A receipt
 for accepted data, an archived file, and an imported workout are distinct outcomes.
 
-There is no dependency on a `digital-data-dump` workflow to archive a batch. R2,
-full-export ZIP ingestion, and synchronous delivery as the sole durability path
-are outside this phase.
+There is no dependency on a `digital-data-dump` workflow to archive a batch or
+save a Strong export. DDD already supports importing the Strong CSV filename;
+uploads do not trigger that importer. R2 and full-export ZIP ingestion remain
+outside this phase. Synchronous delivery applies only to full Strong exports.
 
 ## Data interpretation and identity
 
@@ -111,7 +121,8 @@ pending data during outages and reject new work explicitly at capacity.
 The GitHub credential stays on the server and is restricted to the private vault.
 The phone has an upload credential; administrative actions use a separate one.
 Use HTTPS for deployment, bounded inputs, authenticated limits, and sanitized
-logs. Archive files are immutable and do not replace the existing XML/database.
+logs. Apple Health archive files are immutable and do not replace the existing
+XML/database. Strong replaces only its server-owned CSV path.
 
 Remove delivered payloads from the buffer after a retention period while keeping
 compact receipts for idempotency. Monitor upload freshness and persistent
